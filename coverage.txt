@@ -1,0 +1,22 @@
+mode: set
+github.com/geofpwhite/pq/pq.go:10.75,15.2 1 1
+github.com/geofpwhite/pq/pq.go:17.45,20.2 2 1
+github.com/geofpwhite/pq/pq.go:22.48,23.22 1 1
+github.com/geofpwhite/pq/pq.go:23.22,26.3 2 1
+github.com/geofpwhite/pq/pq.go:27.2,31.18 5 1
+github.com/geofpwhite/pq/pq.go:34.49,35.22 1 1
+github.com/geofpwhite/pq/pq.go:35.22,38.3 2 1
+github.com/geofpwhite/pq/pq.go:39.2,39.24 1 1
+github.com/geofpwhite/pq/pq.go:42.46,43.53 1 1
+github.com/geofpwhite/pq/pq.go:43.53,46.3 2 1
+github.com/geofpwhite/pq/pq.go:49.39,52.77 2 1
+github.com/geofpwhite/pq/pq.go:52.77,53.82 1 1
+github.com/geofpwhite/pq/pq.go:53.82,56.4 2 1
+github.com/geofpwhite/pq/pq.go:56.9,59.4 2 1
+github.com/geofpwhite/pq/priorityChannel.go:16.59,18.2 1 1
+github.com/geofpwhite/pq/priorityChannel.go:20.54,25.2 2 1
+github.com/geofpwhite/pq/priorityChannel.go:27.58,31.2 3 1
+github.com/geofpwhite/pq/priorityChannel.go:33.52,38.2 4 1
+github.com/geofpwhite/pq/priorityChannel.go:40.64,41.21 1 1
+github.com/geofpwhite/pq/priorityChannel.go:41.21,45.3 3 1
+github.com/geofpwhite/pq/priorityChannel.go:46.2,47.27 2 1
