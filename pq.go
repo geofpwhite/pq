@@ -48,7 +48,8 @@ func (pq *PriorityQueue[C, T]) up(index int) {
 
 func (pq *PriorityQueue[C, T]) down() {
 	index := 0
-	for ((2*index+1 < len(pq.ary)) && pq.cmp(pq.ary[index], pq.ary[2*index+1]) > 0) || (2*index+2 < len(pq.ary) && pq.cmp(pq.ary[index], pq.ary[2*index+2]) > 0) {
+	for ((2*index+1 < len(pq.ary)) && pq.cmp(pq.ary[index], pq.ary[2*index+1]) > 0) ||
+		(2*index+2 < len(pq.ary) && pq.cmp(pq.ary[index], pq.ary[2*index+2]) > 0) {
 		if 2*index+2 < len(pq.ary) && pq.cmp(pq.ary[2*index+1], pq.ary[2*index+2]) > 0 {
 			pq.ary[index], pq.ary[2*index+2] = pq.ary[2*index+2], pq.ary[index]
 			index = 2*index + 2
