@@ -1,0 +1,1 @@
+Small library for personal projects that need to use some sort of priority queue. Includes an implementation of a priority channel.
