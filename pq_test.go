@@ -1,15 +1,17 @@
 package pq
 
 import (
+	"math"
 	"math/rand"
 	"sort"
 	"testing"
 )
 
-func intCmp(a, b int) int { return a - b }
+func minIntCmp(a, b int) int { return a - b }
+func maxIntCmp(a, b int) int { return b - a }
 
 func TestNewPriorityQueueEmpty(t *testing.T) {
-	q := NewPriorityQueue(intCmp)
+	q := NewPriorityQueue(minIntCmp)
 	if _, ok := q.Peek(); ok {
 		t.Fatalf("expected empty queue Peek to return false")
 	}
@@ -19,7 +21,7 @@ func TestNewPriorityQueueEmpty(t *testing.T) {
 }
 
 func TestPushPopOrder(t *testing.T) {
-	q := NewPriorityQueue(intCmp)
+	q := NewPriorityQueue(minIntCmp)
 	input := []int{5, 3, 8, 1, 9, 2, 7, 4, 6, 0}
 	for _, v := range input {
 		q.Push(v)
@@ -62,7 +64,7 @@ func TestMaxCmp(t *testing.T) {
 }
 
 func TestPeekDoesNotRemove(t *testing.T) {
-	q := NewPriorityQueue(intCmp)
+	q := NewPriorityQueue(minIntCmp)
 	q.Push(42)
 
 	peeked, ok := q.Peek()
@@ -82,7 +84,7 @@ func TestPeekDoesNotRemove(t *testing.T) {
 }
 
 func TestDuplicatePriorities(t *testing.T) {
-	q := NewPriorityQueue(intCmp)
+	q := NewPriorityQueue(minIntCmp)
 	for _, v := range []int{1, 1, 1, 2, 2, 0} {
 		q.Push(v)
 	}
@@ -102,6 +104,30 @@ func TestDuplicatePriorities(t *testing.T) {
 	}
 	if count != 6 {
 		t.Fatalf("expected 6 items popped, got %d", count)
+	}
+}
+
+func TestWithMaxCmp(t *testing.T) {
+	q := NewPriorityQueue(maxIntCmp)
+	for _, v := range []int{1, 2, 1, 1, 2, 0, 0, 1, 0, 3, 0, 0} {
+		q.Push(v)
+	}
+
+	prev := math.MaxInt
+	count := 0
+	for {
+		v, ok := q.Pop()
+		if !ok {
+			break
+		}
+		if v > prev {
+			t.Fatalf("heap property violated: %d popped after %d", v, prev)
+		}
+		prev = v
+		count++
+	}
+	if count != 12 {
+		t.Fatalf("expected 12 items popped, got %d", count)
 	}
 }
 
@@ -132,7 +158,7 @@ func TestStructComparator(t *testing.T) {
 
 func TestRandomOrderMatchesSort(t *testing.T) {
 	r := rand.New(rand.NewSource(1))
-	q := NewPriorityQueue(intCmp)
+	q := NewPriorityQueue(minIntCmp)
 
 	const n = 1000
 	input := make([]int, n)
