@@ -37,6 +37,29 @@ func (pc *PriorityChannel[T]) Pop() (T, int, bool) {
 	return t.Payload, t.Priority, b
 }
 
+func (pc *PriorityChannel[T]) PopWithCancel(ctx context.Context) (T, int, bool, error) {
+	var ti ChannelMessage[T]
+	var b bool
+	unlocked := make(chan struct{}, 1)
+	done := make(chan struct{}, 1)
+	go func() {
+		pc.mu.Lock()
+		unlocked <- struct{}{}
+		close(unlocked)
+		<-done
+		pc.mu.Unlock()
+	}()
+	select {
+	case <-ctx.Done():
+		done <- struct{}{}
+	case <-unlocked:
+		ti, b = pc.queue.Pop()
+		done <- struct{}{}
+	}
+	close(done)
+	return ti.Payload, ti.Priority, b, ctx.Err()
+}
+
 func (pc *PriorityChannel[T]) TryImmediatePop() (T, int, bool) {
 	if pc.mu.TryLock() {
 		t, b := pc.queue.Pop()
