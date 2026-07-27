@@ -3,6 +3,7 @@ package pq
 import (
 	"math"
 	"math/rand"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -28,7 +29,7 @@ func TestPushPopOrder(t *testing.T) {
 	}
 
 	want := append([]int(nil), input...)
-	sort.Ints(want)
+	slices.Sort(want)
 
 	for i, w := range want {
 		got, ok := q.Pop()

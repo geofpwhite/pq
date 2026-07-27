@@ -1,6 +1,7 @@
 package pq
 
 import (
+	"context"
 	"sync"
 )
 
