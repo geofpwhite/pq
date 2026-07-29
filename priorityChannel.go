@@ -59,8 +59,44 @@ func (pc *PriorityChannel[T]) PopBlocking() (T, int) {
 	<-pc.nonempty
 	pc.mu.Lock()
 	t, _ := pc.queue.Pop()
+	if pc.queue.Len() != 0 {
+		pc.nonempty <- struct{}{}
+	}
 	pc.mu.Unlock()
 	return t.Payload, t.Priority
+}
+
+func (pc *PriorityChannel[T]) PopBlockingWithCancel(ctx context.Context) (T, int, error) {
+	var ti ChannelMessage[T]
+	unlocked := make(chan struct{}, 1)
+	done := make(chan struct{}, 1)
+	go func() {
+		<-pc.nonempty
+		pc.mu.Lock()
+		unlocked <- struct{}{}
+		close(unlocked)
+		<-done
+		pc.mu.Unlock()
+	}()
+	select {
+	case <-ctx.Done():
+		select {
+		case pc.nonempty <- struct{}{}:
+		default:
+		}
+		done <- struct{}{}
+	case <-unlocked:
+		ti, _ = pc.queue.Pop()
+		if pc.queue.Len() > 0 {
+			select {
+			case pc.nonempty <- struct{}{}:
+			default:
+			}
+		}
+		done <- struct{}{}
+	}
+	close(done)
+	return ti.Payload, ti.Priority, ctx.Err()
 }
 
 func (pc *PriorityChannel[T]) PopWithCancel(ctx context.Context) (T, int, bool, error) {
@@ -88,7 +124,17 @@ func (pc *PriorityChannel[T]) PopWithCancel(ctx context.Context) (T, int, bool, 
 
 func (pc *PriorityChannel[T]) TryImmediatePop() (T, int, bool) {
 	if pc.mu.TryLock() {
+		select {
+		case <-pc.nonempty:
+		default:
+		}
 		t, b := pc.queue.Pop()
+		if pc.queue.Len() > 0 {
+			select {
+			case pc.nonempty <- struct{}{}:
+			default:
+			}
+		}
 		pc.mu.Unlock()
 		return t.Payload, t.Priority, b
 	}

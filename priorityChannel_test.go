@@ -80,6 +80,225 @@ func TestTryImmediatePopFailsWhenLocked(t *testing.T) {
 	}
 }
 
+func TestPopBlockingReturnsImmediatelyWhenItemAvailable(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+	pc.Push("item", 5)
+
+	done := make(chan struct{})
+	var payload string
+	var prio int
+	go func() {
+		payload, prio = pc.PopBlocking()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("PopBlocking did not return for an already-available item")
+	}
+	if payload != "item" || prio != 5 {
+		t.Fatalf("unexpected result: %q %d", payload, prio)
+	}
+}
+
+func TestPopBlockingBlocksUntilPushed(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+
+	done := make(chan struct{})
+	var payload string
+	var prio int
+	go func() {
+		payload, prio = pc.PopBlocking()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatalf("PopBlocking returned before any item was pushed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	pc.Push("item", 9)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("PopBlocking did not return after an item was pushed")
+	}
+	if payload != "item" || prio != 9 {
+		t.Fatalf("unexpected result: %q %d", payload, prio)
+	}
+}
+
+func TestPopBlockingOrdersByPriority(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+	pc.Push("low", 1)
+	pc.Push("high", 10)
+	pc.Push("mid", 5)
+
+	wantOrder := []struct {
+		payload string
+		prio    int
+	}{
+		{"high", 10},
+		{"mid", 5},
+		{"low", 1},
+	}
+	for i, want := range wantOrder {
+		payload, prio := pc.PopBlocking()
+		if payload != want.payload || prio != want.prio {
+			t.Fatalf("pop %d: got (%s,%d), want (%s,%d)", i, payload, prio, want.payload, want.prio)
+		}
+	}
+}
+
+func TestPopBlockingConcurrentProducersConsumers(t *testing.T) {
+	pc := NewPriorityChannel[int]()
+
+	const producers = 8
+	const perProducer = 50
+	const total = producers * perProducer
+
+	var wg sync.WaitGroup
+	for i := 0; i < producers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < perProducer; j++ {
+				pc.Push(j, i)
+			}
+		}(i)
+	}
+
+	results := make(chan int, total)
+	for i := 0; i < total; i++ {
+		go func() {
+			_, prio := pc.PopBlocking()
+			results <- prio
+		}()
+	}
+
+	wg.Wait()
+
+	count := 0
+	timeout := time.After(5 * time.Second)
+	for count < total {
+		select {
+		case <-results:
+			count++
+		case <-timeout:
+			t.Fatalf("timed out waiting for consumers: got %d/%d", count, total)
+		}
+	}
+}
+
+func TestPopBlockingWithCancelReturnsItemWhenAvailable(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+	pc.Push("item", 4)
+
+	payload, prio, err := pc.PopBlockingWithCancel(context.Background())
+	if payload != "item" || prio != 4 {
+		t.Fatalf("unexpected result: %q %d", payload, prio)
+	}
+	if err != nil {
+		t.Fatalf("expected nil error on successful pop, got %v", err)
+	}
+}
+
+func TestPopBlockingWithCancelReturnsErrorWhenQueueStaysEmpty(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	payload, prio, err := pc.PopBlockingWithCancel(ctx)
+	elapsed := time.Since(start)
+
+	if payload != "" || prio != 0 {
+		t.Fatalf("expected zero value, got %q %d", payload, prio)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("PopBlockingWithCancel took too long to respect cancellation: %v", elapsed)
+	}
+}
+
+func TestPopBlockingWithCancelWaitsForPushThenSucceeds(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+
+	done := make(chan struct{})
+	var payload string
+	var prio int
+	var err error
+	go func() {
+		payload, prio, err = pc.PopBlockingWithCancel(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatalf("PopBlockingWithCancel returned before any item was pushed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	pc.Push("item", 6)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("PopBlockingWithCancel did not return after an item was pushed")
+	}
+
+	if payload != "item" || prio != 6 {
+		t.Fatalf("unexpected result: %q %d", payload, prio)
+	}
+	if err != nil {
+		t.Fatalf("expected nil error on successful pop, got %v", err)
+	}
+}
+
+// Regression test: an item pushed shortly after a cancellation must still be
+// observable to a later PopBlocking call. The internal goroutine left behind
+// by a cancelled PopBlockingWithCancel must not silently consume the
+// "nonempty" signal for an item it never actually pops.
+func TestPopBlockingWithCancelDoesNotLoseItemPushedAfterCancellation(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, _, err := pc.PopBlockingWithCancel(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+
+	// give the internal goroutine time to unwind after the cancellation
+	time.Sleep(50 * time.Millisecond)
+
+	pc.Push("item", 2)
+
+	done := make(chan struct{})
+	var payload string
+	var prio int
+	go func() {
+		payload, prio = pc.PopBlocking()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("item pushed after cancellation appears to be stuck (lost wakeup)")
+	}
+	if payload != "item" || prio != 2 {
+		t.Fatalf("unexpected result: %q %d", payload, prio)
+	}
+}
+
 func TestPopWithCancelReturnsItemWhenAvailable(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 	pc.Push("item", 7)
