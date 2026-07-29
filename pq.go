@@ -39,6 +39,10 @@ func (pq *PriorityQueue[C, T]) Peek() (T, bool) {
 	return pq.ary[0], true
 }
 
+func (pq *PriorityQueue[C, T]) Len() int {
+	return len(pq.ary)
+}
+
 func (pq *PriorityQueue[C, T]) up(index int) {
 	for pq.cmp(pq.ary[index], pq.ary[(index-1)/2]) < 0 {
 		pq.ary[index], pq.ary[(index-1)/2] = pq.ary[(index-1)/2], pq.ary[index]

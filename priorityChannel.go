@@ -6,8 +6,9 @@ import (
 )
 
 type PriorityChannel[T any] struct {
-	mu    sync.Mutex
-	queue *PriorityQueue[Comparator[ChannelMessage[T]], ChannelMessage[T]]
+	mu       sync.Mutex
+	queue    *PriorityQueue[Comparator[ChannelMessage[T]], ChannelMessage[T]]
+	nonempty chan struct{}
 }
 type ChannelMessage[T any] struct {
 	Payload  T
@@ -20,7 +21,8 @@ func cmpChannelMessage[T any](a, b ChannelMessage[T]) int {
 
 func NewPriorityChannel[T any]() *PriorityChannel[T] {
 	pc := &PriorityChannel[T]{
-		queue: NewPriorityQueue(cmpChannelMessage[T]),
+		queue:    NewPriorityQueue(cmpChannelMessage[T]),
+		nonempty: make(chan struct{}, 1),
 	}
 	return pc
 }
@@ -28,14 +30,37 @@ func NewPriorityChannel[T any]() *PriorityChannel[T] {
 func (pc *PriorityChannel[T]) Push(item T, priority int) {
 	pc.mu.Lock()
 	pc.queue.Push(ChannelMessage[T]{item, priority})
+	select {
+	case pc.nonempty <- struct{}{}:
+	default:
+	}
 	pc.mu.Unlock()
 }
 
 func (pc *PriorityChannel[T]) Pop() (T, int, bool) {
 	pc.mu.Lock()
+	select {
+	case <-pc.nonempty:
+	default:
+	}
 	t, b := pc.queue.Pop()
+	if pc.queue.Len() != 0 {
+		select {
+		case pc.nonempty <- struct{}{}:
+		default:
+		}
+	}
 	pc.mu.Unlock()
 	return t.Payload, t.Priority, b
+}
+
+// blocks until queue isn't empty
+func (pc *PriorityChannel[T]) PopBlocking() (T, int) {
+	<-pc.nonempty
+	pc.mu.Lock()
+	t, _ := pc.queue.Pop()
+	pc.mu.Unlock()
+	return t.Payload, t.Priority
 }
 
 func (pc *PriorityChannel[T]) PopWithCancel(ctx context.Context) (T, int, bool, error) {
