@@ -60,7 +60,10 @@ func (pc *PriorityChannel[T]) PopBlocking() (T, int) {
 	pc.mu.Lock()
 	t, _ := pc.queue.Pop()
 	if pc.queue.Len() != 0 {
-		pc.nonempty <- struct{}{}
+		select {
+		case pc.nonempty <- struct{}{}:
+		default:
+		}
 	}
 	pc.mu.Unlock()
 	return t.Payload, t.Priority
@@ -96,6 +99,7 @@ func (pc *PriorityChannel[T]) PopBlockingWithCancel(ctx context.Context) (T, int
 		done <- struct{}{}
 	}
 	close(done)
+
 	return ti.Payload, ti.Priority, ctx.Err()
 }
 

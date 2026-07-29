@@ -156,12 +156,12 @@ func TestPopBlockingOrdersByPriority(t *testing.T) {
 func TestPopBlockingConcurrentProducersConsumers(t *testing.T) {
 	pc := NewPriorityChannel[int]()
 
-	const producers = 8
+	const producers = 13
 	const perProducer = 50
 	const total = producers * perProducer
 
 	var wg sync.WaitGroup
-	for i := 0; i < producers; i++ {
+	for i := range producers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
