@@ -54,7 +54,7 @@ func (pc *PriorityChannel[T]) Pop() (T, int, bool) {
 	return t.Payload, t.Priority, b
 }
 
-// blocks until queue isn't empty
+// PopBlocking blocks until queue isn't empty
 func (pc *PriorityChannel[T]) PopBlocking() (T, int) {
 	<-pc.nonempty
 	pc.mu.Lock()
