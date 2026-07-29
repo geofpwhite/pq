@@ -6,9 +6,9 @@ import (
 )
 
 type PriorityChannel[T any] struct {
-	mu       sync.Mutex
-	queue    *PriorityQueue[Comparator[ChannelMessage[T]], ChannelMessage[T]]
-	nonempty chan struct{}
+	mu    sync.Mutex
+	cond  *sync.Cond
+	queue *PriorityQueue[Comparator[ChannelMessage[T]], ChannelMessage[T]]
 }
 type ChannelMessage[T any] struct {
 	Payload  T
@@ -21,86 +21,52 @@ func cmpChannelMessage[T any](a, b ChannelMessage[T]) int {
 
 func NewPriorityChannel[T any]() *PriorityChannel[T] {
 	pc := &PriorityChannel[T]{
-		queue:    NewPriorityQueue(cmpChannelMessage[T]),
-		nonempty: make(chan struct{}, 1),
+		queue: NewPriorityQueue(cmpChannelMessage[T]),
 	}
+	pc.cond = sync.NewCond(&pc.mu)
 	return pc
 }
 
 func (pc *PriorityChannel[T]) Push(item T, priority int) {
 	pc.mu.Lock()
 	pc.queue.Push(ChannelMessage[T]{item, priority})
-	select {
-	case pc.nonempty <- struct{}{}:
-	default:
-	}
 	pc.mu.Unlock()
+	pc.cond.Signal()
 }
 
 func (pc *PriorityChannel[T]) Pop() (T, int, bool) {
 	pc.mu.Lock()
-	select {
-	case <-pc.nonempty:
-	default:
-	}
+	defer pc.mu.Unlock()
 	t, b := pc.queue.Pop()
-	if pc.queue.Len() != 0 {
-		select {
-		case pc.nonempty <- struct{}{}:
-		default:
-		}
-	}
-	pc.mu.Unlock()
 	return t.Payload, t.Priority, b
 }
 
 // PopBlocking blocks until queue isn't empty
 func (pc *PriorityChannel[T]) PopBlocking() (T, int) {
-	<-pc.nonempty
 	pc.mu.Lock()
-	t, _ := pc.queue.Pop()
-	if pc.queue.Len() != 0 {
-		select {
-		case pc.nonempty <- struct{}{}:
-		default:
-		}
+	defer pc.mu.Unlock()
+	for pc.queue.Len() == 0 {
+		pc.cond.Wait()
 	}
-	pc.mu.Unlock()
+	t, _ := pc.queue.Pop()
 	return t.Payload, t.Priority
 }
 
 func (pc *PriorityChannel[T]) PopBlockingWithCancel(ctx context.Context) (T, int, error) {
-	var ti ChannelMessage[T]
-	unlocked := make(chan struct{}, 1)
-	done := make(chan struct{}, 1)
-	go func() {
-		<-pc.nonempty
-		pc.mu.Lock()
-		unlocked <- struct{}{}
-		close(unlocked)
-		<-done
-		pc.mu.Unlock()
-	}()
-	select {
-	case <-ctx.Done():
-		select {
-		case pc.nonempty <- struct{}{}:
-		default:
-		}
-		done <- struct{}{}
-	case <-unlocked:
-		ti, _ = pc.queue.Pop()
-		if pc.queue.Len() > 0 {
-			select {
-			case pc.nonempty <- struct{}{}:
-			default:
-			}
-		}
-		done <- struct{}{}
-	}
-	close(done)
+	stop := context.AfterFunc(ctx, pc.cond.Broadcast)
+	defer stop()
 
-	return ti.Payload, ti.Priority, ctx.Err()
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	for pc.queue.Len() == 0 {
+		if err := ctx.Err(); err != nil {
+			var zero T
+			return zero, 0, err
+		}
+		pc.cond.Wait()
+	}
+	t, _ := pc.queue.Pop()
+	return t.Payload, t.Priority, nil
 }
 
 func (pc *PriorityChannel[T]) PopWithCancel(ctx context.Context) (T, int, bool, error) {
@@ -128,18 +94,8 @@ func (pc *PriorityChannel[T]) PopWithCancel(ctx context.Context) (T, int, bool, 
 
 func (pc *PriorityChannel[T]) TryImmediatePop() (T, int, bool) {
 	if pc.mu.TryLock() {
-		select {
-		case <-pc.nonempty:
-		default:
-		}
+		defer pc.mu.Unlock()
 		t, b := pc.queue.Pop()
-		if pc.queue.Len() > 0 {
-			select {
-			case pc.nonempty <- struct{}{}:
-			default:
-			}
-		}
-		pc.mu.Unlock()
 		return t.Payload, t.Priority, b
 	}
 	var zeroVal T

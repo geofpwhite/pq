@@ -165,14 +165,14 @@ func TestPopBlockingConcurrentProducersConsumers(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			for j := 0; j < perProducer; j++ {
+			for j := range perProducer {
 				pc.Push(j, i)
 			}
 		}(i)
 	}
 
 	results := make(chan int, total)
-	for i := 0; i < total; i++ {
+	for range total {
 		go func() {
 			_, prio := pc.PopBlocking()
 			results <- prio
@@ -263,7 +263,7 @@ func TestPopBlockingWithCancelWaitsForPushThenSucceeds(t *testing.T) {
 
 // Regression test: an item pushed shortly after a cancellation must still be
 // observable to a later PopBlocking call. The internal goroutine left behind
-// by a cancelled PopBlockingWithCancel must not silently consume the
+// by a canceled PopBlockingWithCancel must not silently consume the
 // "nonempty" signal for an item it never actually pops.
 func TestPopBlockingWithCancelDoesNotLoseItemPushedAfterCancellation(t *testing.T) {
 	pc := NewPriorityChannel[string]()
@@ -486,5 +486,25 @@ func TestPriorityChannelConcurrentPushPop(t *testing.T) {
 	}
 	if count != producers*perProducer {
 		t.Fatalf("expected %d items, got %d", producers*perProducer, count)
+	}
+}
+
+func TestPopBlockingRacesWithPlainPop(t *testing.T) {
+	for i := 0; i < 5000; i++ {
+		pc := NewPriorityChannel[string]()
+		pc.Push("x", 1)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			pc.PopBlocking()
+		}()
+		go func() {
+			defer wg.Done()
+			pc.Pop()
+		}()
+		pc.Push("x", 1)
+		wg.Wait()
 	}
 }
