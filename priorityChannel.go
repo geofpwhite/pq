@@ -34,25 +34,8 @@ func (pc *PriorityChannel[T]) Push(item T, priority int) {
 	pc.cond.Signal()
 }
 
-func (pc *PriorityChannel[T]) Pop() (T, int, bool) {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	t, b := pc.queue.Pop()
-	return t.Payload, t.Priority, b
-}
-
-// PopBlocking blocks until queue isn't empty
-func (pc *PriorityChannel[T]) PopBlocking() (T, int) {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	for pc.queue.Len() == 0 {
-		pc.cond.Wait()
-	}
-	t, _ := pc.queue.Pop()
-	return t.Payload, t.Priority
-}
-
-func (pc *PriorityChannel[T]) PopBlockingWithCancel(ctx context.Context) (T, int, error) {
+// PopBlocking blocks until queue isn't empty or context is canceled.
+func (pc *PriorityChannel[T]) PopBlocking(ctx context.Context) (T, int, error) {
 	stop := context.AfterFunc(ctx, pc.cond.Broadcast)
 	defer stop()
 
@@ -69,7 +52,7 @@ func (pc *PriorityChannel[T]) PopBlockingWithCancel(ctx context.Context) (T, int
 	return t.Payload, t.Priority, nil
 }
 
-func (pc *PriorityChannel[T]) PopWithCancel(ctx context.Context) (T, int, bool, error) {
+func (pc *PriorityChannel[T]) Pop(ctx context.Context) (T, int, bool, error) {
 	var ti ChannelMessage[T]
 	var b bool
 	unlocked := make(chan struct{}, 1)

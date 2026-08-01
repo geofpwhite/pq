@@ -10,7 +10,7 @@ import (
 
 func TestNewPriorityChannelEmpty(t *testing.T) {
 	pc := NewPriorityChannel[string]()
-	if _, _, ok := pc.Pop(); ok {
+	if _, _, ok, _ := pc.Pop(t.Context()); ok {
 		t.Fatalf("expected empty channel Pop to return false")
 	}
 }
@@ -30,7 +30,7 @@ func TestPriorityChannelOrder(t *testing.T) {
 		{"low", 1},
 	}
 	for i, want := range wantOrder {
-		payload, prio, ok := pc.Pop()
+		payload, prio, ok, _ := pc.Pop(t.Context())
 		if !ok {
 			t.Fatalf("pop %d: expected ok=true", i)
 		}
@@ -38,14 +38,14 @@ func TestPriorityChannelOrder(t *testing.T) {
 			t.Fatalf("pop %d: got (%s,%d), want (%s,%d)", i, payload, prio, want.payload, want.prio)
 		}
 	}
-	if _, _, ok := pc.Pop(); ok {
+	if _, _, ok, _ := pc.Pop(t.Context()); ok {
 		t.Fatalf("expected channel empty after draining")
 	}
 }
 
 func TestPriorityChannelZeroValueOnEmptyPop(t *testing.T) {
 	pc := NewPriorityChannel[int]()
-	payload, _, ok := pc.Pop()
+	payload, _, ok, _ := pc.Pop(t.Context())
 	if ok {
 		t.Fatalf("expected ok=false")
 	}
@@ -80,54 +80,16 @@ func TestTryImmediatePopFailsWhenLocked(t *testing.T) {
 	}
 }
 
-func TestPopBlockingReturnsImmediatelyWhenItemAvailable(t *testing.T) {
+func TestPopBlockingReturnsItemWhenAvailable(t *testing.T) {
 	pc := NewPriorityChannel[string]()
-	pc.Push("item", 5)
+	pc.Push("item", 4)
 
-	done := make(chan struct{})
-	var payload string
-	var prio int
-	go func() {
-		payload, prio = pc.PopBlocking()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("PopBlocking did not return for an already-available item")
-	}
-	if payload != "item" || prio != 5 {
+	payload, prio, err := pc.PopBlocking(context.Background())
+	if payload != "item" || prio != 4 {
 		t.Fatalf("unexpected result: %q %d", payload, prio)
 	}
-}
-
-func TestPopBlockingBlocksUntilPushed(t *testing.T) {
-	pc := NewPriorityChannel[string]()
-
-	done := make(chan struct{})
-	var payload string
-	var prio int
-	go func() {
-		payload, prio = pc.PopBlocking()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		t.Fatalf("PopBlocking returned before any item was pushed")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	pc.Push("item", 9)
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("PopBlocking did not return after an item was pushed")
-	}
-	if payload != "item" || prio != 9 {
-		t.Fatalf("unexpected result: %q %d", payload, prio)
+	if err != nil {
+		t.Fatalf("expected nil error on successful pop, got %v", err)
 	}
 }
 
@@ -146,7 +108,10 @@ func TestPopBlockingOrdersByPriority(t *testing.T) {
 		{"low", 1},
 	}
 	for i, want := range wantOrder {
-		payload, prio := pc.PopBlocking()
+		payload, prio, err := pc.PopBlocking(context.Background())
+		if err != nil {
+			t.Fatalf("pop %d: unexpected error %v", i, err)
+		}
 		if payload != want.payload || prio != want.prio {
 			t.Fatalf("pop %d: got (%s,%d), want (%s,%d)", i, payload, prio, want.payload, want.prio)
 		}
@@ -174,7 +139,10 @@ func TestPopBlockingConcurrentProducersConsumers(t *testing.T) {
 	results := make(chan int, total)
 	for range total {
 		go func() {
-			_, prio := pc.PopBlocking()
+			_, prio, err := pc.PopBlocking(context.Background())
+			if err != nil {
+				panic(err)
+			}
 			results <- prio
 		}()
 	}
@@ -193,27 +161,14 @@ func TestPopBlockingConcurrentProducersConsumers(t *testing.T) {
 	}
 }
 
-func TestPopBlockingWithCancelReturnsItemWhenAvailable(t *testing.T) {
-	pc := NewPriorityChannel[string]()
-	pc.Push("item", 4)
-
-	payload, prio, err := pc.PopBlockingWithCancel(context.Background())
-	if payload != "item" || prio != 4 {
-		t.Fatalf("unexpected result: %q %d", payload, prio)
-	}
-	if err != nil {
-		t.Fatalf("expected nil error on successful pop, got %v", err)
-	}
-}
-
-func TestPopBlockingWithCancelReturnsErrorWhenQueueStaysEmpty(t *testing.T) {
+func TestPopBlockingReturnsErrorWhenQueueStaysEmpty(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
-	payload, prio, err := pc.PopBlockingWithCancel(ctx)
+	payload, prio, err := pc.PopBlocking(ctx)
 	elapsed := time.Since(start)
 
 	if payload != "" || prio != 0 {
@@ -223,11 +178,11 @@ func TestPopBlockingWithCancelReturnsErrorWhenQueueStaysEmpty(t *testing.T) {
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 	if elapsed > 500*time.Millisecond {
-		t.Fatalf("PopBlockingWithCancel took too long to respect cancellation: %v", elapsed)
+		t.Fatalf("PopBlocking took too long to respect cancellation: %v", elapsed)
 	}
 }
 
-func TestPopBlockingWithCancelWaitsForPushThenSucceeds(t *testing.T) {
+func TestPopBlockingWaitsForPushThenSucceeds(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 
 	done := make(chan struct{})
@@ -235,13 +190,13 @@ func TestPopBlockingWithCancelWaitsForPushThenSucceeds(t *testing.T) {
 	var prio int
 	var err error
 	go func() {
-		payload, prio, err = pc.PopBlockingWithCancel(context.Background())
+		payload, prio, err = pc.PopBlocking(context.Background())
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		t.Fatalf("PopBlockingWithCancel returned before any item was pushed")
+		t.Fatalf("PopBlocking returned before any item was pushed")
 	case <-time.After(50 * time.Millisecond):
 	}
 
@@ -250,7 +205,7 @@ func TestPopBlockingWithCancelWaitsForPushThenSucceeds(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatalf("PopBlockingWithCancel did not return after an item was pushed")
+		t.Fatalf("PopBlocking did not return after an item was pushed")
 	}
 
 	if payload != "item" || prio != 6 {
@@ -262,22 +217,17 @@ func TestPopBlockingWithCancelWaitsForPushThenSucceeds(t *testing.T) {
 }
 
 // Regression test: an item pushed shortly after a cancellation must still be
-// observable to a later PopBlocking call. The internal goroutine left behind
-// by a canceled PopBlockingWithCancel must not silently consume the
-// "nonempty" signal for an item it never actually pops.
-func TestPopBlockingWithCancelDoesNotLoseItemPushedAfterCancellation(t *testing.T) {
+// observable to a later PopBlocking call.
+func TestPopBlockingDoesNotLoseItemPushedAfterCancellation(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	_, _, err := pc.PopBlockingWithCancel(ctx)
+	_, _, err := pc.PopBlocking(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
-
-	// give the internal goroutine time to unwind after the cancellation
-	time.Sleep(50 * time.Millisecond)
 
 	pc.Push("item", 2)
 
@@ -285,7 +235,7 @@ func TestPopBlockingWithCancelDoesNotLoseItemPushedAfterCancellation(t *testing.
 	var payload string
 	var prio int
 	go func() {
-		payload, prio = pc.PopBlocking()
+		payload, prio, _ = pc.PopBlocking(context.Background())
 		close(done)
 	}()
 
@@ -299,11 +249,11 @@ func TestPopBlockingWithCancelDoesNotLoseItemPushedAfterCancellation(t *testing.
 	}
 }
 
-func TestPopWithCancelReturnsItemWhenAvailable(t *testing.T) {
+func TestPopReturnsItemWhenAvailable(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 	pc.Push("item", 7)
 
-	payload, prio, ok, err := pc.PopWithCancel(context.Background())
+	payload, prio, ok, err := pc.Pop(context.Background())
 	if !ok || payload != "item" || prio != 7 {
 		t.Fatalf("unexpected result: %q %d %v", payload, prio, ok)
 	}
@@ -312,7 +262,7 @@ func TestPopWithCancelReturnsItemWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestPopWithCancelEmptyQueueReturnsFalseWithNilError(t *testing.T) {
+func TestPopEmptyQueueReturnsFalseWithNilError(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 
 	done := make(chan struct{})
@@ -321,14 +271,14 @@ func TestPopWithCancelEmptyQueueReturnsFalseWithNilError(t *testing.T) {
 	var ok bool
 	var err error
 	go func() {
-		payload, prio, ok, err = pc.PopWithCancel(context.Background())
+		payload, prio, ok, err = pc.Pop(context.Background())
 		close(done)
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatalf("PopWithCancel blocked on an empty, uncontended channel")
+		t.Fatalf("Pop blocked on an empty, uncontended channel")
 	}
 	if ok || payload != "" || prio != 0 {
 		t.Fatalf("expected zero value and ok=false, got %q %d %v", payload, prio, ok)
@@ -338,7 +288,7 @@ func TestPopWithCancelEmptyQueueReturnsFalseWithNilError(t *testing.T) {
 	}
 }
 
-func TestPopWithCancelReturnsCancellationErrorDuringLockContention(t *testing.T) {
+func TestPopReturnsCancellationErrorDuringLockContention(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 	pc.Push("item", 1)
 
@@ -354,7 +304,7 @@ func TestPopWithCancelReturnsCancellationErrorDuringLockContention(t *testing.T)
 	var ok bool
 	var err error
 	go func() {
-		payload, prio, ok, err = pc.PopWithCancel(ctx)
+		payload, prio, ok, err = pc.Pop(ctx)
 		close(done)
 	}()
 
@@ -362,7 +312,7 @@ func TestPopWithCancelReturnsCancellationErrorDuringLockContention(t *testing.T)
 	case <-done:
 	case <-time.After(time.Second):
 		pc.mu.Unlock()
-		t.Fatalf("PopWithCancel did not return after context cancellation")
+		t.Fatalf("Pop did not return after context cancellation")
 	}
 	elapsed := time.Since(start)
 
@@ -373,18 +323,21 @@ func TestPopWithCancelReturnsCancellationErrorDuringLockContention(t *testing.T)
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 	if elapsed > 500*time.Millisecond {
-		t.Fatalf("PopWithCancel took too long to respect cancellation: %v", elapsed)
+		t.Fatalf("Pop took too long to respect cancellation: %v", elapsed)
 	}
 
 	pc.mu.Unlock() // release the simulated contention
 
-	value, priority, ok := pc.Pop()
+	value, priority, ok, err := pc.Pop(context.Background())
 	if !ok || value != "item" || priority != 1 {
 		t.Fatalf("expected channel to still work after cancellation, got %q %d %v", value, priority, ok)
 	}
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
 }
 
-func TestPopWithCancelWaitsForLockThenSucceeds(t *testing.T) {
+func TestPopWaitsForLockThenSucceeds(t *testing.T) {
 	pc := NewPriorityChannel[string]()
 	pc.Push("item", 3)
 
@@ -396,17 +349,17 @@ func TestPopWithCancelWaitsForLockThenSucceeds(t *testing.T) {
 	var ok bool
 	var err error
 	go func() {
-		payload, prio, ok, err = pc.PopWithCancel(context.Background())
+		payload, prio, ok, err = pc.Pop(context.Background())
 		close(done)
 	}()
 
-	time.Sleep(20 * time.Millisecond) // give PopWithCancel a chance to start waiting on the lock
+	time.Sleep(20 * time.Millisecond) // give Pop a chance to start waiting on the lock
 	pc.mu.Unlock()
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatalf("PopWithCancel did not return once the lock became available")
+		t.Fatalf("Pop did not return once the lock became available")
 	}
 
 	if !ok || payload != "item" || prio != 3 {
@@ -417,7 +370,7 @@ func TestPopWithCancelWaitsForLockThenSucceeds(t *testing.T) {
 	}
 }
 
-func TestPopWithCancelDistinguishesCancelFromEmptyQueue(t *testing.T) {
+func TestPopDistinguishesCancelFromEmptyQueue(t *testing.T) {
 	// Canceled context, contended lock: error should be non-nil.
 	pcCancelled := NewPriorityChannel[string]()
 	pcCancelled.mu.Lock()
@@ -428,14 +381,14 @@ func TestPopWithCancelDistinguishesCancelFromEmptyQueue(t *testing.T) {
 	var cancelledErr error
 	var cancelledOK bool
 	go func() {
-		_, _, cancelledOK, cancelledErr = pcCancelled.PopWithCancel(ctx)
+		_, _, cancelledOK, cancelledErr = pcCancelled.Pop(ctx)
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		pcCancelled.mu.Unlock()
-		t.Fatalf("PopWithCancel did not return for an already-canceled context")
+		t.Fatalf("Pop did not return for an already-canceled context")
 	}
 	pcCancelled.mu.Unlock()
 
@@ -448,7 +401,7 @@ func TestPopWithCancelDistinguishesCancelFromEmptyQueue(t *testing.T) {
 
 	// Uncancelled context, empty queue: ok=false but error should be nil.
 	pcEmpty := NewPriorityChannel[string]()
-	emptyPayload, _, emptyOK, emptyErr := pcEmpty.PopWithCancel(context.Background())
+	emptyPayload, _, emptyOK, emptyErr := pcEmpty.Pop(context.Background())
 	if emptyOK {
 		t.Fatalf("expected ok=false for an empty queue, got payload %q", emptyPayload)
 	}
@@ -481,7 +434,7 @@ func TestPriorityChannelConcurrentPushPop(t *testing.T) {
 	wg.Wait()
 
 	count := 0
-	for _, _, ok := pc.Pop(); ok; _, _, ok = pc.Pop() {
+	for _, _, ok, _ := pc.Pop(context.Background()); ok; _, _, ok, _ = pc.Pop(context.Background()) {
 		count++
 	}
 	if count != producers*perProducer {
@@ -489,8 +442,12 @@ func TestPriorityChannelConcurrentPushPop(t *testing.T) {
 	}
 }
 
-func TestPopBlockingRacesWithPlainPop(t *testing.T) {
-	for i := 0; i < 5000; i++ {
+// Regression test: PopBlocking's wakeup must never be trusted on its own --
+// it only means "go re-check the queue." A concurrent Pop() winning the race
+// for the same item must not corrupt or crash PopBlocking; it should simply
+// keep waiting for the next real item.
+func TestPopBlockingRacesWithPop(t *testing.T) {
+	for range 5000 {
 		pc := NewPriorityChannel[string]()
 		pc.Push("x", 1)
 
@@ -498,11 +455,11 @@ func TestPopBlockingRacesWithPlainPop(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			pc.PopBlocking()
+			pc.PopBlocking(context.Background())
 		}()
 		go func() {
 			defer wg.Done()
-			pc.Pop()
+			pc.Pop(context.Background())
 		}()
 		pc.Push("x", 1)
 		wg.Wait()
