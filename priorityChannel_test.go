@@ -442,6 +442,74 @@ func TestPriorityChannelConcurrentPushPop(t *testing.T) {
 	}
 }
 
+func TestCloseOnEmptyChannelReturnsPromptly(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+
+	done := make(chan struct{})
+	go func() {
+		pc.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("Close on an empty channel did not return")
+	}
+}
+
+func TestCloseThenPushReturnsError(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+	pc.Close()
+
+	if err := pc.Push("item", 1); err == nil {
+		t.Fatalf("expected Push after Close to return an error")
+	}
+}
+
+func TestCloseThenPopBlockingReturnsError(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+	pc.Close()
+
+	_, _, err := pc.PopBlocking(context.Background())
+	if err == nil {
+		t.Fatalf("expected PopBlocking after Close to return an error")
+	}
+}
+
+// Regression test: Close is supposed to block until any items already queued
+// have been drained by consumers, then tear down the queue. But neither Pop
+// nor PopBlocking signal the condition variable after removing an item, so
+// Close's `for pc.queue.Len() > 0 { pc.cond.Wait() }` loop never wakes back up
+// -- it deadlocks forever even though the queue does reach length 0.
+func TestCloseCompletesOnceConsumerDrainsPendingItems(t *testing.T) {
+	pc := NewPriorityChannel[string]()
+	pc.Push("a", 1)
+	pc.Push("b", 2)
+
+	done := make(chan struct{})
+	go func() {
+		pc.Close()
+		close(done)
+	}()
+
+	// Give Close a chance to acquire the lock, see Len() > 0, and start
+	// waiting on the condition variable before the consumer drains the queue.
+	time.Sleep(20 * time.Millisecond)
+
+	go func() {
+		for range 2 {
+			pc.PopBlocking(context.Background())
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("Close did not return after a consumer drained all pending items (missing signal on Pop/PopBlocking)")
+	}
+}
+
 // Regression test: PopBlocking's wakeup must never be trusted on its own --
 // it only means "go re-check the queue." A concurrent Pop() winning the race
 // for the same item must not corrupt or crash PopBlocking; it should simply
